@@ -1,0 +1,335 @@
+---
+title: "Geomap_Rotavirus"
+author: "Yueqi"
+date: "07/16/2021"
+output: 
+    html_document:
+        toc: true
+        highlight: default
+---
+
+
+<!--- Set global options that apply to every code chunk in this file, can be overwritten in individual chunk headers --->
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+<!--- (Code Chunk 2) Load packages (previously installed)  --->
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+```
+
+<!--- (Code Chunk 3) Set WD and read data file --->
+```{r, include=FALSE}
+# import data, fix NA and convert to numbers, checking for data type
+rv <- read.csv("RV_age_group.csv",na.strings=c(" NULL","","NA"))
+
+# filter with NA in country and multiple countries
+rv <- rv %>% filter(Country !="NA")
+
+# subset to different age group
+Little <- rv %>% filter(EffiX ==1 | Any.12mo!="NA" |Severe.12mo != "NA" | Hosp..12mo != "NA")   # little kids age <12mo
+OneY <-  rv %>% filter(Any12.24mo !="NA" | Severe12.24mo != "NA" | Hosp12.24mo !="NA") # kids age 12-24mo
+TwoY <- rv %>% filter(Any.24mo!="NA" |Severe.24mo!="NA" |Hosp.24mo!="NA" ) # kids age>24 mo
+```
+
+
+### GeoMap of all age groups
+```{r}
+library(tidyverse)
+library(sf)
+library(rvest)
+library(stringr)
+library(scales)
+library(dplyr)
+library(viridis)
+
+
+map.world <- map_data('world')
+
+
+## vaccine efficacy against severe RVGE
+df.ve <- rv %>%
+  filter(EffiX ==1 ) %>%
+  select(Country, VE_severe) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_severe)
+
+anti_join(df.ve, map.world, by = c('country' = 'region'))
+
+map.VE <- left_join( map.world, df.ve, by = c('region' = 'country')) 
+
+ggplot(map.VE, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) + 
+  labs(fill = 'VE'
+       ,title = 'Vaccine Efficacy'
+       ,subtitle = 'against severe RVGE (all ages)'
+       ,x = NULL
+       ,y = NULL) + scale_fill_viridis(option="D")
+```
+```{r}
+## vaccine effectiveness against hospitalization RVGE
+df.vehosp <- rv %>%
+  filter(EffiX ==0 ) %>%
+  select(Country, VE_hosp) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_hosp) 
+df.vehosp <- df.vehosp%>%
+  filter(ve != "NA"|country !="NA" )
+df.vehosp$ve[df.vehosp$country == "Brazil"] = 75.8   #replacing multiple year's data with one fixed value
+df.vehosp$ve[df.vehosp$country == "USA"] = 93
+df.vehosp$ve[df.vehosp$country == "Spain"] = 98.3
+df.vehosp$ve[df.vehosp$country == "Finland"] = 98
+
+
+anti_join(df.vehosp, map.world, by = c('country' = 'region'))
+
+map.VE2 <- left_join( map.world, df.vehosp, by = c('region' = 'country')) 
+
+ggplot(map.VE2, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) +
+  theme_minimal() +
+  labs(fill = 'VE'
+       ,title = 'Vaccine Effectiveness'
+       ,subtitle = 'against RVGE Hospitalization (all ages)'
+       ,x = NULL
+       ,y = NULL) + scale_fill_viridis(option="D",limits=c(20,100))
+
+```
+
+# Geomap with different age groups (12mo)
+```{r}
+#unique(df.ve$country)   #42 countries included in the Vaccine efficacy_Severe analysis
+#unique(df.vehosp$country)  # 32 countries included in the Vaccine effectiveness_Hospitalizarion analysis
+#unique(Little.effectiveness$country)
+df.vehosp <- rv %>%
+  filter(EffiX ==0 ) %>%
+  select(Country, VE_hosp) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_hosp) 
+Little.effectiveness <- Little %>%
+  filter(EffiX ==0 ) %>% select(Country, Any.12mo, Severe.12mo,Hosp..12mo)   # The hopitalization column is with most data, use this column to plot
+Little.effectiveness <- Little.effectiveness %>% select(Country,Hosp..12mo) %>%rename(country = Country, ve = Hosp..12mo) 
+
+Little.effectiveness$ve[Little.effectiveness$country == "USA"] = 93
+
+anti_join(df.vehosp, map.world, by = c('country' = 'region'))
+
+map.VE3 <- left_join( map.world, Little.effectiveness, by = c('region' = 'country')) 
+
+ggplot(map.VE3, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) +
+  theme_minimal() +
+  labs(fill = 'VE'
+       ,title = 'Vaccine Effectiveness'
+       ,subtitle = 'against RVGE Hospitalization (<12mo)'
+       ,x = NULL
+       ,y = NULL) + scale_fill_viridis(option="D",limits=c(20,100))
+
+```
+
+### Geomap with different age groups (12-24mo)
+```{r}
+df.vehosp <- rv %>%
+  filter(EffiX ==0 ) %>%
+  select(Country, VE_hosp) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_hosp) 
+OneY.effectiveness <- OneY %>%
+  filter(EffiX ==0 ) %>% select(Country, Any12.24mo,Severe12.24mo,Hosp12.24mo)   # The hopitalization column is with most data, use this column to plot
+OneY.effectiveness <- OneY.effectiveness %>% select(Country,Hosp12.24mo) %>%rename(country = Country, ve = Hosp12.24mo) 
+
+unique(OneY.effectiveness$country)
+
+anti_join(df.vehosp, map.world, by = c('country' = 'region'))
+
+map.VE4 <- left_join( map.world, OneY.effectiveness, by = c('region' = 'country')) 
+
+ggplot(map.VE4, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) +
+  theme_minimal() +
+  labs(fill = 'VE'
+       ,title = 'Vaccine Effectiveness'
+       ,subtitle = 'against RVGE Hospitalization (12-24mo)'
+       ,x = NULL
+       ,y = NULL) + scale_fill_viridis(option="D",limits=c(20,100))
+
+```
+
+### Geomap with different age groups (>24mo)
+```{r}
+df.vehosp <- rv %>%
+  filter(EffiX ==0 ) %>%
+  select(Country, VE_hosp) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_hosp) 
+TwoY.effectiveness <- TwoY %>%
+  filter(EffiX ==0 ) %>% select(Country, Any.24mo,Severe.24mo,Hosp.24mo)   # The hopitalization column is with most data, use this column to plot
+
+#only have 6 observations left in the column
+
+TwoY.effectiveness <- TwoY.effectiveness %>% select(Country,Hosp.24mo) %>%rename(country = Country, ve = Hosp.24mo) 
+
+unique(OneY.effectiveness$country)
+
+anti_join(df.vehosp, map.world, by = c('country' = 'region'))
+
+map.VE4 <- left_join( map.world, OneY.effectiveness, by = c('region' = 'country')) 
+
+ggplot(map.VE4, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) +
+  theme_minimal() +
+  labs(fill = 'VE'
+       ,title = 'Vaccine Effectiveness'
+       ,subtitle = 'against RVGE Hospitalization (12-24mo)'
+       ,x = NULL
+       ,y = NULL) + scale_fill_viridis(option="D",limits=c(20,100))
+```
+
+
+```{r}
+# select countries with rotavirus prevalence data
+rotaPrev <- rv %>% filter(RV.incidence.rate_any..100.infant!="NA" |RV.incidence.rate_severe..100.infant!="NA" | RV.incidence.rate_hospitalization..100.infant!="NA")
+rotaPrev <- rotaPrev[,c(2,3,4,22,23,24)]
+unique(rotaPrev$Country)
+
+#plot for the Rotavirus prevalence map across different countries
+rotaPrev <- rotaPrev %>%
+  select(Country, RV.incidence.rate_severe..100.infant) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = RV.incidence.rate_severe..100.infant) 
+
+rotaPrev$ve <- as.numeric(rotaPrev$ve)
+rotaPrev[14,2] = 16.3
+
+anti_join(rotaPrev, map.world, by = c('country' = 'region'))
+
+map.rotaprev <- left_join( map.world, rotaPrev, by = c('region' = 'country')) 
+
+ggplot(map.rotaprev , aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) +
+  theme_minimal() +
+  labs(fill = 'incidence/100 person-year'
+       ,title = 'Rotavirus prevalence against severe RVGE'
+       ,subtitle = ''
+       ,x = NULL
+       ,y = NULL) + scale_fill_viridis(option="D")
+```
+
+
+
+## Shiny app
+```{r}
+library(shiny)
+library(maps)
+library(mapproj)
+library(dplyr)
+
+# counties <- readRDS("counties.rds")
+rv <- read.csv("RV_age_group.csv",na.strings=c(" NULL","","NA"))
+
+# filter with NA in country and multiple countries
+rv <- rv %>% filter(Country !="NA")
+
+# percent_map(counties$white, "darkgreen", "% White")
+
+
+ui <- fluidPage(
+  titlePanel("VE geomap"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      
+      selectInput("vex", 
+                  label = "Choose VE type",
+                  choices = c("Vaccine Efficacy","Vaccine Effectiveness"),
+                  selected = "Vaccine Efficacy"),
+      selectInput("sev", 
+                  label = "VE against",
+                  choices = c("Any RVGE","Severe RVGE","Hospitalization"),
+                  selected = "Severe RVGE"),
+      
+      selectInput("age", 
+                  label = "Age",
+                  choices = c("<12 months","12-24 months",">24 months"),
+                  selected = "<12 months")
+    ),
+    
+    mainPanel(plotOutput("map"))
+  )
+)
+
+#-------------------------------------------------#
+server <- function(input, output) {
+  
+  
+}
+shinyApp(ui, server)
+
+
+#-------------------------#
+worldMaps <- function(df, rv, vex,sev, age){
+  
+  # Function for setting the aesthetics of the plot
+  my_theme <- function () { 
+    theme_bw() + theme(axis.title = element_blank(),
+                       axis.text = element_blank(),
+                       axis.ticks = element_blank(),
+                       panel.grid.major = element_blank(), 
+                       panel.grid.minor = element_blank(),
+                       panel.background = element_blank(), 
+                       legend.position = "bottom",
+                       panel.border = element_blank(), 
+                       strip.background = element_rect(fill = 'white', colour = 'white'))
+  }
+  
+  # Select only the data that the user has selected to view
+  plotdf <- df[df$Vex == vex & df$Sev == sev & df$Age == age,]
+  
+  # Add the data the user wants to see to the geographical world data
+rv['Vex'] <- rep(vex, nrow(rv))
+rv['Sev'] <- rep(sev, nrow(rv))
+rv['Age'] <- rep(age, nrow(rv))
+  
+library(RColorBrewer)
+library(ggiraph)
+  g <- ggplot() + 
+    geom_polygon_interactive(data = subset(rv, lat >= -60 & lat <= 90), color = 'gray70', size = 0.1,
+                             aes(x = long, y = lat, fill = Value, group = group, 
+                                 tooltip = sprintf("%s<br/>%s", ISO3, Value))) + 
+    scale_fill_gradientn(colours = brewer.pal(5, "RdBu"), na.value = 'white') + 
+    labs(fill = data_type, color = data_type, title = NULL, x = NULL, y = NULL, caption = capt) + 
+    my_theme()
+  
+  return(g)
+}
+
+server = function(input, output) {
+  
+  # Create the interactive world map
+  output$distPlot <- renderGirafe({
+    ggiraph(code = print(worldMaps(df, rv, input$data_type, input$vex, input$sev,input$age)))
+  })
+  
+  # Change the choices for the second selection on the basis of the input to the first selection
+  output$secondSelection <- renderUI({
+    choice_second <- as.list(unique(df$Period[which(df$DataType == input$data_type)]))
+    selectInput(inputId = "period", choices = choice_second,
+                label = "Choose the period for which you want to see the data:")
+  })
+  
+  # Change the choices for the third selection on the basis of the input to the first and second selections
+  output$thirdSelection <- renderUI({
+    lab <- ifelse(input$data_type == "Childlessness", "age group", "indicator")
+    choice_third <- as.list(unique(df$Indicator[df$DataType == input$data_type & df$Period == input$period]))
+    selectInput(inputId = "indicator", choices = choice_third,
+                label = paste0("Choose the type of ", lab, " you want to explore:"))
+  })
+}
+
+# Finally, we can run our app by either clicking "Run App" in the top of our RStudio IDE, or by running
+shinyApp(ui = ui, server = server)
+
+```
+
+
+
+
+
