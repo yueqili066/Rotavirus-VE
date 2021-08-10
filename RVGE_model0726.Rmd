@@ -1,0 +1,691 @@
+---
+title: "RVGE model_with revised spreadsheet data_0723"
+author: "Yueqi"
+date: "7/23/2021"
+output: 
+    html_document:
+        toc: true
+        highlight: default
+---
+
+
+<!--- Set global options that apply to every code chunk in this file, can be overwritten in individual chunk headers --->
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+<!--- (Code Chunk 2) Load packages (previously installed)  --->
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(knitr)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+```
+
+<!--- (Code Chunk 3) Set WD and read data file --->
+```{r, include=FALSE}
+# import data, fix NA and convert to numbers, checking for data type
+rv <- read.csv("RVGE_0723_VECommunityControl.csv",na.strings=c("NULL",""))
+
+rv <- rv %>% filter(GBD.Super.Region !="NA")
+
+#subset to fewer columns
+rv <- subset(rv[,c(3,4,11,13,15,18,51,52,53,54,55,56,57,58,59,60,61,62,63)])
+```
+
+```{r}
+# str(rv)
+rv$X..of.population.living.in.extreme.poverty....2.day. = as.numeric(rv$X..of.population.living.in.extreme.poverty....2.day.)
+# check for the unique country number 
+# unique(rv$Country)      
+
+##replace the discontinued country name with the same one
+rv$Country[rv$Country == c("United States","US","US Indian children")] = "US"
+
+#After that, 52 country is included in our analysis
+```
+
+subset to efficacy/effectiveness analysis
+```{r}
+rv_efficacy <- rv %>% filter(Efficacy...1..or.effectiveness...0. ==1)
+dim(rv_efficacy)
+unique(rv_efficacy$Country)     # 38 countries is included in efficacy analysis
+
+rv_effectiveness <- rv %>% filter(Efficacy...1..or.effectiveness...0. ==0)
+unique(rv_effectiveness$Country)   # 31 countries is included in effectiveness analysis
+
+```
+
+## Vaccine efficacy 
+Concentrate on **Vaccine efficacy** against **severe RVGE**
+
+### Multiple Linear Regression 
+The outcome variable is **Vaccine Efficacy of Severe RVGE**
+
+```{r}
+Effi_severe <- rv_efficacy[,-c(1,3,4,6)]
+
+
+names(Effi_severe)[1:15] <- c("SuperRegion","VE_severe","Pop.Den","U5.Mor","Crude.BR","GDP","Safely.DW","Safely.San","Undernour","Prev.HIV" , "Gini.Index" , "Education" , "Extreme.Poverty" ,"Income.Low20" , "Urban.Pop")
+
+#perform multiple linear regression
+
+Effi_severe <- Effi_severe[,-c(7,8,10,12)]    # As the water, education and HIV includes too many NA, excluded from our analysis
+summary(lm(VE_severe~ ., data = Effi_severe, na.action=na.omit))
+```
+
+
+#### AIC selection
+```{r}
+library(MASS)
+
+mod.full <- lm(VE_severe~ ., data = Effi_severe)
+mod.null <- lm(VE_severe~1, data = mod.full$model)
+stepAIC(mod.null, scope = list(lower = mod.null, upper = mod.full), data = Effi_severe, direction ='both')
+
+```
+
+
+### Spike and slab with `lm.spike`
+```{r}
+library(bsts)
+
+spmodel <- lm.spike(VE_severe~ ., data = Effi_severe, niter = 500)
+plot(spmodel,
+     y = c("inclusion", "coefficients", "scaled.coefficients",
+              "residuals", "fit", "size", "help"),burn = SuggestBurnLogLikelihood(spmodel$log.likelihood))
+
+# remove predictor variable
+# spmodel1 <- lm.spike(VE_severe~ SuperRegion+ Pop.Den+Crude.BR +GDP + Undernour + Gini.Index
+#                    + Extreme.Poverty+ Income.Low20+ Urban.Pop,     # remove Under 5 mortality
+#                    data = Effi_severe, niter = 1000)
+# plot(spmodel1,
+#      y = c("inclusion", "coefficients", "scaled.coefficients",
+#               "residuals", "fit", "size", "help") ,burn = SuggestBurnLogLikelihood(spmodel1$log.likelihood))
+
+
+```
+
+
+## Random Forest for variable selection
+```{r}
+library(randomForest)
+Effi_severe = na.omit(Effi_severe)
+m1 <- randomForest(
+  formula = VE_severe~ .,
+  data    = Effi_severe,
+  ntree=1000, mtry=2, importance=TRUE)
+
+m1
+varImpPlot(m1)
+```
+
+
+### Include the selected predictors in the MLR
+```{r}
+summary(lm(VE_severe~ SuperRegion+ U5.Mor + GDP+ Extreme.Poverty, data = Effi_severe, na.action=na.omit))
+
+summary(lm(VE_severe~ SuperRegion+ U5.Mor, data = Effi_severe, na.action=na.omit))
+
+summary(glm(VE_severe~ SuperRegion+ U5.Mor, data = Effi_severe, na.action=na.omit))
+```
+
+### Cross validation
+```{r}
+library(caret)
+# Define training control
+# train.control <- trainControl(method = "cv", number = 5)
+train.control <- trainControl(method = "repeatedcv", 
+                              number = 10, repeats = 50)
+# Train the model
+model1 <- train(VE_severe~ U5.Mor, data = Effi_severe, method = "lm",
+               trControl = train.control)
+model2 <- train(VE_severe~ SuperRegion+ U5.Mor, data = Effi_severe, method = "lm",
+               trControl = train.control) 
+
+model3 <- train(VE_severe~ SuperRegion+ U5.Mor + GDP , data = Effi_severe, method = "lm",
+               trControl = train.control)
+
+model4 <- train(VE_severe~ SuperRegion+ U5.Mor + GDP + Pop.Den , data = Effi_severe, method = "lm",
+               trControl = train.control)
+
+modelall <- train(VE_severe~ SuperRegion+ U5.Mor + GDP + Pop.Den+Crude.BR  + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop, data = Effi_severe, method = "lm",
+               trControl = train.control)
+
+
+print(model1)
+print(model2)
+print(model3)
+print(model4)
+print(modelall)
+
+
+# Define training control: 5 fold cross-validation. If you want to perform 10 fold cv, set number=10,
+# train_control <- trainControl(method="cv", number=5)
+train.control <- trainControl(method = "cv", 
+                              number = 7)
+# Train the model using randomForest (rf)
+# model <- train(Sepal.Length~., data=iris, trControl=train_control, method="rf")
+
+model <- train(VE_severe~ SuperRegion+ U5.Mor, data = Effi_severe, method = "rf",
+               trControl = train.control)
+##The printed summary shows the sample sizes used, the best model selected and other information.
+print(model)
+
+train.control <- trainControl(method = "cv", 
+                              number = 7)
+modeltry <- train(VE_severe~ SuperRegion+ U5.Mor + GDP + Pop.Den+Crude.BR  + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop, data = Effi_severe, method = "rf",
+               trControl = train.control)
+print(modeltry)
+
+# Make predictions
+predictions <- predict(modelm, Effi_severe[,-1]) # Here the code actually not working... But finally the other form finally works!!! Congradulations!
+
+# Summarize results
+result <- data.frame(Actual=Effi_severe[,1],Predicted=predictions)
+result$Difference <- abs(result$Actual – result$Predicted)
+summary(result$Difference)
+
+
+
+##===================## Final try, hope it would work...
+dim(Effi_severe)
+train_control<- trainControl(method="cv", number=10, savePredictions = TRUE)
+model<- train(VE_severe~ SuperRegion+ U5.Mor, data = Effi_severe, trControl=train_control, method="rpart")
+model$pred
+print(model)
+
+#=============#
+train_control<- trainControl(method="cv", number=10, savePredictions = TRUE)
+model<- train(VE_severe~ SuperRegion+ U5.Mor + GDP + Pop.Den+Crude.BR  + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop, data = Effi_severe, method = "rf", trControl=train_control)
+model$pred
+print(model)
+
+#================#
+# score = list()
+# 
+# LOOCV_function = function(x,label){
+#  for(i in 1:nrow(x)){
+#  training = x[-i,]
+#  model = VE_severe~ SuperRegion+ U5.Mor
+#  validation = x[i,]
+#  pred = predict(model, validation[,setdiff(names(validation),label)])
+#  score[[i]] = rmse(pred, validation[label]) # score/error of ith fold
+#  }
+#  return(unlist(score)) # returns a vector
+ }
+```
+
+```{r}
+# use random forest and repeated cv
+library(caret)
+# Define training control
+
+train.control <- trainControl(method = "repeatedcv",
+                              number = 10, repeats = 10,savePredictions = TRUE)
+modelall <- train(VE_severe~ SuperRegion+ U5.Mor + GDP + Pop.Den+Crude.BR  + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop, data = Effi_severe, method = "rf",
+               trControl = train.control)
+modelall$pred
+print(modelall)
+
+modelmtry <- train(VE_severe~ SuperRegion+ U5.Mor , data = Effi_severe, method = "rf",
+               trControl = train.control)
+modelmtry$pred
+
+print(modelmtry)
+
+```
+
+```{r}
+# use linear regression and repeated cv
+library(caret)
+# Define training control
+
+train.control <- trainControl(method = "repeatedcv",
+                              number = 10, repeats = 10,savePredictions = TRUE)
+modelall <- train(VE_severe~ SuperRegion+ U5.Mor + GDP + Pop.Den+Crude.BR  + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop, data = Effi_severe, method = "lm",
+               trControl = train.control)
+modelall$pred
+print(modelall)
+
+modelmtry <- train(VE_severe~ SuperRegion+ U5.Mor , data = Effi_severe, method = "lm",
+               trControl = train.control)
+modelmtry$pred
+
+print(modelmtry)
+
+```
+
+
+
+
+###Vaccine Effectiveness
+
+```{r}
+Effect_hosp <- rv_effectiveness[,-c(1,3,4,5)]
+
+
+names(Effect_hosp)[1:15] <- c("SuperRegion","VE_hosp","Pop.Den","U5.Mor","Crude.BR","GDP","Safely.DW","Safely.San","Undernour","Prev.HIV" , "Gini.Index" , "Education" , "Extreme.Poverty" ,"Income.Low20" , "Urban.Pop")
+
+#perform multiple linear regression
+
+Effect_hosp <- Effect_hosp[,-c(7,8,10,12)]    # As the water, education and HIV includes too many NA, excluded from our analysis
+summary(lm(VE_hosp~ ., data = Effect_hosp, na.action=na.omit))
+```
+
+#### AIC selection
+```{r}
+library(MASS)
+
+mod.full <- lm(VE_hosp~ ., data = Effect_hosp)
+mod.null <- lm(VE_hosp~1, data = mod.full$model)
+stepAIC(mod.null, scope = list(lower = mod.null, upper = mod.full), data = Effect_hosp, direction ='both')
+
+```
+
+
+### Spike and slab with `lm.spike`
+```{r}
+library(bsts)
+
+spmodel <- lm.spike(VE_hosp~ ., data = Effect_hosp, niter = 500)
+plot(spmodel,
+     y = c("inclusion", "coefficients", "scaled.coefficients",
+              "residuals", "fit", "size", "help"),burn = SuggestBurnLogLikelihood(spmodel$log.likelihood))
+
+# remove predictor variable
+spmodel1 <- lm.spike(VE_hosp~ SuperRegion+ Pop.Den+Crude.BR + U5.Mor + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop,     # GDP
+                   data = Effect_hosp, niter = 500)
+plot(spmodel1,
+     y = c("inclusion", "coefficients", "scaled.coefficients",
+              "residuals", "fit", "size", "help") ,burn = SuggestBurnLogLikelihood(spmodel1$log.likelihood))
+
+```
+```{r}
+## Random Forest for variable selection
+library(randomForest)
+Effect_hosp = na.omit(Effect_hosp)
+m2 <- randomForest(
+  formula = VE_hosp~ .,
+  data    = Effect_hosp,
+  ntree=1000, mtry=2, importance=TRUE)
+
+varImpPlot(m2)
+```
+
+### Cross validation
+```{r}
+library(caret)
+# Define training control
+# set.seed(123) 
+train.control <- trainControl(method = "repeatedcv", 
+                              number = 5, repeats = 50)
+# Train the model
+model1 <- train(VE_hosp~ GDP , data = Effect_hosp, method = "lm",
+               trControl = train.control)
+model2 <- train(VE_hosp~ GDP + U5.Mor, data = Effect_hosp, method = "lm",
+               trControl = train.control)  
+modelall <- train(VE_hosp~ GDP + U5.Mor+SuperRegion+ Pop.Den+Crude.BR + Undernour + Gini.Index + Extreme.Poverty+ Income.Low20 + Urban.Pop, data = Effect_hosp, method = "lm",trControl = train.control)
+
+
+print(model1)
+print(model2)
+print(modelall)
+```
+
+```{r}
+# use random forest and repeated cv
+library(caret)
+# Define training control
+
+train.control <- trainControl(method = "repeatedcv",
+                              number = 5, repeats = 10,savePredictions = TRUE)
+modelall <- train(VE_hosp~ GDP + U5.Mor+SuperRegion+ Pop.Den+Crude.BR + Undernour + Gini.Index + Extreme.Poverty+ Income.Low20 + Urban.Pop, data = Effect_hosp, method = "rf",
+               trControl = train.control)
+modelall$pred
+print(modelall)
+
+modelmtry <- train(VE_hosp~ GDP + U5.Mor , data = Effect_hosp, method = "rf",
+               trControl = train.control)
+modelmtry$pred
+
+print(modelmtry)
+```
+
+```{r}
+#vaccine effectiveness
+# use random forest and repeated cv
+library(caret)
+# Define training control
+
+train.control <- trainControl(method = "repeatedcv",
+                              number = 5, repeats = 10,savePredictions = TRUE)
+modelall <- train(VE_hosp~ GDP + U5.Mor+SuperRegion+ Pop.Den+Crude.BR + Undernour + Gini.Index + Extreme.Poverty+ Income.Low20 + Urban.Pop, data = Effect_hosp, method = "lm",
+               trControl = train.control)
+modelall$pred
+print(modelall)
+
+modelmtry <- train(VE_hosp~ GDP + U5.Mor , data = Effect_hosp, method = "lm",
+               trControl = train.control)
+modelmtry$pred
+
+print(modelmtry)
+```
+
+
+### Pool the effectiveness and efficacy data together
+```{r}
+
+Effect_hosp02 <- Effect_hosp %>% rename(VE =VE_hosp)
+Effi_severe02 <- Effi_severe %>% rename(VE = VE_severe)
+
+VE = rbind(Effi_severe02,Effect_hosp02)
+```
+
+```{r}
+#MLR
+summary(lm(VE~ ., data = VE, na.action=na.omit))
+
+#Spike and slab
+library(bsts)
+
+spmodel <- lm.spike(VE~ ., data = VE, niter = 500)
+plot(spmodel,
+     y = c("inclusion", "coefficients", "scaled.coefficients",
+              "residuals", "fit", "size", "help"),burn = SuggestBurnLogLikelihood(spmodel$log.likelihood))
+
+#Random Forest
+library(randomForest)
+VE = na.omit(VE)
+m2 <- randomForest(
+  formula = VE~ .,
+  data    = VE,
+  ntree=1000, mtry=2, importance=TRUE)
+
+varImpPlot(m2)
+
+# use random forest and repeated cv
+library(caret)
+# Define training control
+train.control <- trainControl(method = "repeatedcv",
+                              number = 10, repeats = 10,savePredictions = TRUE)
+modelall <- train(VE~ GDP + U5.Mor+SuperRegion+ Pop.Den+Crude.BR + Undernour + Gini.Index + Extreme.Poverty+ Income.Low20 + Urban.Pop, data = VE, method = "lm",
+               trControl = train.control)
+modelall$pred
+print(modelall)
+
+modelmtry <- train(VE~ GDP + U5.Mor , data = VE, method = "lm",
+               trControl = train.control)
+modelmtry$pred
+
+print(modelmtry)
+
+
+
+```
+
+
+
+
+
+
+#######============################
+split for the old coding part, should be discarded!!!
+
+## Vaccine Effectiveness 
+Concentrate on **Vaccine Effectiveness ** against **Hospitalized RVGE**
+
+### Multiple Linear Regression 
+The outcome variable is **Vaccine Effectiveness of Hospitalized RVGE**
+```{r}
+# Effect_hosp <- rv_effective %>% dplyr::select("VE_Hosp","Pop.Den","U5.Mor","Crude.BR","GDP","Safely.DW","Safely.San","Undernour","Prev.HIV" , "Gini.Index" , "Education" , "Extreme.Poverty" ,"Income.Low20" , "Urban.Pop")
+#  
+# # evaluating the overall model 
+# summary(lm(VE_Hosp~ ., data = Effect_hosp, na.action=na.omit))
+
+# eliminate sanitation, too many NAs would influence the result
+Effect_hosp02 <- rv_effective %>% dplyr::select("VE_Hosp","Pop.Den","U5.Mor","Crude.BR","GDP","Undernour", "Gini.Index"  , "Extreme.Poverty" ,"Income.Low20" , "Urban.Pop")
+
+### This part is for scale the data
+Effect_hosp02 = as.data.frame(scale(Effect_hosp02[,-1]))
+Effect_hosp02 = cbind(rv_effective$VE_Hosp,Effect_hosp02)
+names(Effect_hosp02)[1] <- "VE_Hosp"
+### finish scale
+
+summary(lm(VE_Hosp~ ., data = Effect_hosp02))
+```
+
+* Forward selection 
+```{r}
+library(MASS)
+
+# Full model (contains all predictors under consideration)
+mod.fulleffective <- lm(VE_Hosp~ ., data = Effect_hosp02)
+# Null model (intercept only, notice data= here)
+mod.nulleffective <- lm(VE_Hosp ~1, data = mod.fulleffective$model)
+
+stepAIC(mod.nulleffective, scope = list(lower = mod.nulleffective, upper = mod.fulleffective), data = Effect_hosp02, direction ='forward')
+
+```
+
+* Backward
+```{r}
+stepAIC(mod.fulleffective, scope = list(lower = mod.nulleffective, upper = mod.fulleffective), data = Effect_hosp02, direction ='backward')
+```
+
+* Stepwise
+
+```{r}
+stepAIC(mod.nulleffective, scope = list(lower =  mod.nulleffective, upper = mod.fulleffective), data = Effect_hosp02, direction ='both')
+```
+
+### Spike and slab with `lm.spike`
+```{r}
+library(bsts)
+
+spmodel1 <- lm.spike(VE_Hosp~ ., data = Effect_hosp02, niter = 1000)
+plot(spmodel1,
+     y = c("inclusion", "coefficients", "scaled.coefficients",
+              "residuals", "fit", "size", "help"))
+
+spmodel2 <- lm.spike(VE_Hosp~ Pop.Den+Crude.BR + Undernour + Gini.Index
+                   + Extreme.Poverty+ Income.Low20+ Urban.Pop+ U5.Mor, data = Effect_hosp02, niter = 1000)    # remove GDP
+plot(spmodel2,
+     y = c("inclusion", "coefficients", "scaled.coefficients",
+              "residuals", "fit", "size", "help"))
+
+```
+
+### Collinearity
+```{r}
+subset = Effect_hosp02[,c(2,3,5,10)]   # select U5 mortality, GDP and Urban population
+cor(subset)
+
+```
+
+
+
+
+
+
+
+### Lasso regression
+```{r}
+#Lasso regression against vaccine efficacy
+x <- model.matrix(VE_severe ~ 0 + ., data = Effi_severe02) 
+y <- Effi_severe02$VE_severe
+library(glmnet)
+
+#perform k-fold cross-validation to find optimal lambda value
+lassoMod <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- lassoMod$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(lassoMod)
+
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+### Lasso regression
+```{r}
+#Lasso regression against vaccine effectiveness
+x <- model.matrix(VE_Hosp ~ 0 + ., data = Effect_hosp02) 
+y <- Effect_hosp02$VE_Hosp
+library(glmnet)
+
+#perform k-fold cross-validation to find optimal lambda value
+lassoMod <- cv.glmnet(x, y, alpha = 1)
+
+#find optimal lambda value that minimizes test MSE
+best_lambda <- lassoMod$lambda.min
+best_lambda
+
+#produce plot of test MSE by lambda value
+plot(lassoMod)
+
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
+
+
+
+
+
+```{r}
+library(ggplot2)
+library(sf)
+library("dplyr")   
+library("rnaturalearth")
+library("rnaturalearthdata")
+library(rgeos)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+library("dplyr")
+ve <- rv %>%
+  filter(EffiX ==1 ) %>%
+  select(Country, VE_severe) %>%                      # Select the two columns of interest
+  rename(region = Country, ve = VE_severe)
+world <- world %>% rename(region = admin)
+
+VE_map <- left_join(ve, world, by = "region")
+
+ggplot(data = VE_map) +
+    geom_sf(aes(fill = ve)) +
+    scale_fill_viridis_c(option = "plasma", trans = "sqrt")
+```
+
+```{r}
+
+library("rworldmap")
+library("rworldxtra")
+world <- getMap(resolution = "high")
+
+library("dplyr")
+ve <- rv %>%
+  filter(EffiX ==1 ) %>%
+  select(Country, VE_severe) %>%                      # Select the two columns of interest
+  rename(region = Country, ve = VE_severe)
+
+# VE_map <- left_join(world,ve, by = "region")
+ggplot(data = world) +
+    geom_sf()
+ggplot(, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve))
+```
+
+### Try again, WHF the output???
+```{r}
+
+library(ggplot2)
+library(maps)
+world = map_data("world")
+
+ve <- rv %>%
+  filter(EffiX ==1 ) %>%
+  select(Country, VE_severe) %>%                      # Select the two columns of interest
+  rename(region = Country, ve = VE_severe)
+
+VE_map <- merge(ve,world)
+
+ggplot(data = VE_map) + 
+             geom_polygon(aes(x = long, y = lat, color = VE_map$ve, group = group))
+
+```
+
+### GeoMap (Finally success!!)
+```{r}
+library(tidyverse)
+library(sf)
+library(rvest)
+library(stringr)
+library(scales)
+library("dplyr")
+
+map.world <- map_data('world')
+rv.geo <- read.csv('RV_age_group.csv',na.strings=c(" NULL","","NA","#VALUE!"))
+
+
+## vaccine efficacy against severe RVGE
+df.ve <- rv.geo %>%
+  filter(EffiX ==1 ) %>%
+  select(Country, VE_severe) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_severe)
+
+anti_join(df.ve, map.world, by = c('country' = 'region'))
+
+map.VE <- left_join( map.world, df.ve, by = c('region' = 'country')) 
+
+ggplot(map.VE, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) + 
+  labs(fill = 'VE'
+       ,title = 'Vaccine Efficacy'
+       ,subtitle = 'against severe RVGE'
+       ,x = NULL
+       ,y = NULL)
+
+## vaccine effectiveness against hospitalization RVGE
+df.vehosp <- rv.geo %>%
+  filter(EffiX ==0 ) %>%
+  select(Country, VE_hosp) %>%                      # Select the two columns of interest
+  rename(country = Country, ve = VE_hosp)
+
+anti_join(df.vehosp, map.world, by = c('country' = 'region'))
+
+map.VE2 <- left_join( map.world, df.vehosp, by = c('region' = 'country')) 
+
+ggplot(map.VE2, aes( x = long, y = lat, group = group )) +
+  geom_polygon(aes(fill = ve)) + 
+  labs(fill = 'VE'
+       ,title = 'Vaccine Effectiveness'
+       ,subtitle = 'against RVGE Hospitalization'
+       ,x = NULL
+       ,y = NULL)
+
+
+
+```
+
+
+
+### Age group analysis
+
+```{r}
+rv_age <- read.csv("")
+```
+
+
+
+
+
